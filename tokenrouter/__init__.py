@@ -5,7 +5,7 @@ A Python SDK for the TokenRouter API that provides intelligent routing
 to multiple LLM providers with cost optimization.
 """
 
-from .client import Client, AsyncClient
+from .client import TokenRouter, AsyncTokenRouter
 from .models import (
     ChatCompletion,
     ChatCompletionMessage,
@@ -25,8 +25,8 @@ from .exceptions import (
 
 __version__ = "1.0.0"
 __all__ = [
-    "Client",
-    "AsyncClient",
+    "TokenRouter",
+    "AsyncTokenRouter",
     "ChatCompletion",
     "ChatCompletionMessage",
     "ChatCompletionChoice",

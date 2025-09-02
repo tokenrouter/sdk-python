@@ -174,3 +174,5 @@ dist/
 # Logs
 *.log
 logs/
+
+CLAUDE.md

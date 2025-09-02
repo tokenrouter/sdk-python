@@ -114,6 +114,7 @@ class ChatCompletions:
         echo: Optional[bool] = None,
         user: Optional[str] = None,
         model_preferences: Optional[List[str]] = None,
+        mode: Optional[str] = None,  # 'cost', 'quality', 'latency', or 'balanced'
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
@@ -160,6 +161,8 @@ class ChatCompletions:
             payload["user"] = user
         if model_preferences is not None:
             payload["model_preferences"] = model_preferences
+        if mode is not None:
+            payload["mode"] = mode
         if tools is not None:
             payload["tools"] = tools
         if tool_choice is not None:
@@ -201,6 +204,7 @@ class AsyncChatCompletions:
         echo: Optional[bool] = None,
         user: Optional[str] = None,
         model_preferences: Optional[List[str]] = None,
+        mode: Optional[str] = None,  # 'cost', 'quality', 'latency', or 'balanced'
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
@@ -247,6 +251,8 @@ class AsyncChatCompletions:
             payload["user"] = user
         if model_preferences is not None:
             payload["model_preferences"] = model_preferences
+        if mode is not None:
+            payload["mode"] = mode
         if tools is not None:
             payload["tools"] = tools
         if tool_choice is not None:
@@ -266,7 +272,7 @@ class AsyncChatCompletions:
             return ChatCompletion.from_dict(response)
 
 
-class Client(BaseClient):
+class TokenRouter(BaseClient):
     """Synchronous TokenRouter client"""
     
     def __init__(self, *args, **kwargs):
@@ -388,7 +394,7 @@ class Client(BaseClient):
         return self._request("GET", "/health")
 
 
-class AsyncClient(BaseClient):
+class AsyncTokenRouter(BaseClient):
     """Asynchronous TokenRouter client"""
     
     def __init__(self, *args, **kwargs):
