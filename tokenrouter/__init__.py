@@ -23,7 +23,7 @@ from .exceptions import (
     APIStatusError,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.0.3"
 __all__ = [
     "TokenRouter",
     "AsyncTokenRouter",

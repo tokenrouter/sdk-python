@@ -4,7 +4,7 @@ TokenRouter SDK Client
 
 import os
 import time
-import json
+import json as jsonlib
 import asyncio
 from typing import Optional, Dict, Any, List, Union, AsyncIterator, Iterator
 from urllib.parse import urljoin
@@ -15,6 +15,26 @@ from .models import (
     ChatCompletion,
     ChatCompletionMessage,
     ChatCompletionChunk,
+    Usage,
+    # Text completion models (legacy completions)
+)
+from typing import TypedDict
+
+
+class TextCompletionChoice(TypedDict, total=False):
+    text: str
+    index: int
+    logprobs: Optional[Dict[str, Any]]
+    finish_reason: Optional[str]
+
+
+class TextCompletion(TypedDict, total=False):
+    id: str
+    object: str
+    created: int
+    model: str
+    choices: List[TextCompletionChoice]
+    usage: Optional[Dict[str, int]]
     Model,
     ModelCosts,
     Analytics,
@@ -34,7 +54,7 @@ from .exceptions import (
 class BaseClient:
     """Base client with common functionality"""
     
-    DEFAULT_BASE_URL = "http://localhost:8000"
+    DEFAULT_BASE_URL = "https://api.tokenrouter.io"
     DEFAULT_TIMEOUT = 60.0
     DEFAULT_MAX_RETRIES = 3
     
@@ -57,7 +77,7 @@ class BaseClient:
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "tokenrouter-python/1.0.0",
+            "User-Agent": "tokenrouter-python/1.0.3",
         }
         if headers:
             self.headers.update(headers)
@@ -182,6 +202,59 @@ class ChatCompletions:
             return ChatCompletion.from_dict(response)
 
 
+class LegacyCompletions:
+    """OpenAI legacy completions interface (/v1/completions)"""
+
+    def __init__(self, client: "TokenRouter"):
+        self.client = client
+
+    def create(
+        self,
+        prompt: str,
+        model: str = "auto",
+        mode: Optional[str] = None,
+        model_preferences: Optional[List[str]] = None,
+        stream: bool = False,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        user: Optional[str] = None,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        **kwargs,
+    ) -> Union[TextCompletion, Iterator[Dict[str, Any]]]:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": stream,
+        }
+        if mode is not None:
+            payload["mode"] = mode
+        if model_preferences is not None:
+            payload["model_preferences"] = model_preferences
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if user is not None:
+            payload["user"] = user
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if stop is not None:
+            payload["stop"] = stop
+        payload.update(kwargs)
+
+        if stream:
+            return self.client._stream_request_raw("/v1/completions", payload)
+        else:
+            return self.client._request("POST", "/v1/completions", json=payload)
+
+
 class AsyncChatCompletions:
     """Async chat completions interface"""
     
@@ -272,6 +345,59 @@ class AsyncChatCompletions:
             return ChatCompletion.from_dict(response)
 
 
+class AsyncLegacyCompletions:
+    """OpenAI legacy completions interface (/v1/completions) - async"""
+
+    def __init__(self, client: "AsyncTokenRouter"):
+        self.client = client
+
+    async def create(
+        self,
+        prompt: str,
+        model: str = "auto",
+        mode: Optional[str] = None,
+        model_preferences: Optional[List[str]] = None,
+        stream: bool = False,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        user: Optional[str] = None,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        **kwargs,
+    ) -> Union[TextCompletion, AsyncIterator[Dict[str, Any]]]:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": stream,
+        }
+        if mode is not None:
+            payload["mode"] = mode
+        if model_preferences is not None:
+            payload["model_preferences"] = model_preferences
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if user is not None:
+            payload["user"] = user
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if stop is not None:
+            payload["stop"] = stop
+        payload.update(kwargs)
+
+        if stream:
+            return self.client._stream_request_raw("/v1/completions", payload)
+        else:
+            return await self.client._request("POST", "/v1/completions", json=payload)
+
+
 class TokenRouter(BaseClient):
     """Synchronous TokenRouter client"""
     
@@ -283,6 +409,7 @@ class TokenRouter(BaseClient):
             timeout=self.timeout,
         )
         self.chat = ChatCompletions(self)
+        self.completions = LegacyCompletions(self)
     
     def __enter__(self):
         return self
@@ -293,6 +420,76 @@ class TokenRouter(BaseClient):
     def close(self):
         """Close the client"""
         self.client.close()
+
+    # Native TokenRouter endpoint: /route
+    def create(
+        self,
+        messages: List[Union[Dict[str, Any], ChatCompletionMessage]],
+        model: str = "auto",
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        max_completion_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        stream: bool = False,
+        user: Optional[str] = None,
+        model_preferences: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> Union[ChatCompletion, Iterator[ChatCompletionChunk]]:
+        """Create using native /route endpoint (OpenAI-like shape with TokenRouter metadata)"""
+        # Convert messages to dicts if needed
+        messages_dict: List[Dict[str, Any]] = []
+        for msg in messages:
+            if isinstance(msg, ChatCompletionMessage):
+                messages_dict.append(msg.to_dict())
+            else:
+                messages_dict.append(msg)
+
+        payload: Dict[str, Any] = {
+            "messages": messages_dict,
+            "model": model,
+            "stream": stream,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        # Prefer max_completion_tokens if provided
+        if max_completion_tokens is not None:
+            payload["max_completion_tokens"] = max_completion_tokens
+        elif max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if stop is not None:
+            payload["stop"] = stop
+        if user is not None:
+            payload["user"] = user
+        if model_preferences is not None:
+            payload["model_preferences"] = model_preferences
+        if mode is not None:
+            payload["mode"] = mode
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if response_format is not None:
+            payload["response_format"] = response_format
+        payload.update(kwargs)
+
+        if stream:
+            return self.client._stream_request("/route", payload)
+        else:
+            response = self.client._request("POST", "/route", json=payload)
+            return ChatCompletion.from_dict(response)
     
     def _request(
         self,
@@ -352,6 +549,28 @@ class TokenRouter(BaseClient):
                     chunk = ChatCompletionChunk.from_sse_data(data)
                     if chunk:
                         yield chunk
+
+    def _stream_request_raw(
+        self,
+        path: str,
+        json: Optional[Dict[str, Any]] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """Make a streaming request and yield raw JSON objects per SSE data line"""
+        url = urljoin(self.base_url, path)
+        with self.client.stream("POST", url, json=json) as response:
+            try:
+                response.raise_for_status()
+            except HTTPStatusError:
+                self._handle_response_error(response)
+            for line in response.iter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        yield jsonlib.loads(data)
+                    except Exception:
+                        continue
     
     def completions(
         self,
@@ -405,6 +624,7 @@ class AsyncTokenRouter(BaseClient):
             timeout=self.timeout,
         )
         self.chat = AsyncChatCompletions(self)
+        self.completions = AsyncLegacyCompletions(self)
     
     async def __aenter__(self):
         return self
@@ -415,6 +635,75 @@ class AsyncTokenRouter(BaseClient):
     async def close(self):
         """Close the client"""
         await self.client.aclose()
+
+    # Native TokenRouter endpoint: /route (async)
+    async def create(
+        self,
+        messages: List[Union[Dict[str, Any], ChatCompletionMessage]],
+        model: str = "auto",
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        max_completion_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        stream: bool = False,
+        user: Optional[str] = None,
+        model_preferences: Optional[List[str]] = None,
+        mode: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> Union[ChatCompletion, AsyncIterator[ChatCompletionChunk]]:
+        """Create using native /route endpoint (OpenAI-like shape with TokenRouter metadata)"""
+        # Convert messages to dicts if needed
+        messages_dict: List[Dict[str, Any]] = []
+        for msg in messages:
+            if isinstance(msg, ChatCompletionMessage):
+                messages_dict.append(msg.to_dict())
+            else:
+                messages_dict.append(msg)
+
+        payload: Dict[str, Any] = {
+            "messages": messages_dict,
+            "model": model,
+            "stream": stream,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_completion_tokens is not None:
+            payload["max_completion_tokens"] = max_completion_tokens
+        elif max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if stop is not None:
+            payload["stop"] = stop
+        if user is not None:
+            payload["user"] = user
+        if model_preferences is not None:
+            payload["model_preferences"] = model_preferences
+        if mode is not None:
+            payload["mode"] = mode
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if response_format is not None:
+            payload["response_format"] = response_format
+        payload.update(kwargs)
+
+        if stream:
+            return self.client._stream_request("/route", payload)
+        else:
+            response = await self.client._request("POST", "/route", json=payload)
+            return ChatCompletion.from_dict(response)
     
     async def _request(
         self,
@@ -474,6 +763,28 @@ class AsyncTokenRouter(BaseClient):
                     chunk = ChatCompletionChunk.from_sse_data(data)
                     if chunk:
                         yield chunk
+
+    async def _stream_request_raw(
+        self,
+        path: str,
+        json: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Make a streaming request and yield raw JSON objects per SSE data line (async)"""
+        url = urljoin(self.base_url, path)
+        async with self.client.stream("POST", url, json=json) as response:
+            try:
+                response.raise_for_status()
+            except HTTPStatusError:
+                self._handle_response_error(response)
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        yield jsonlib.loads(data)
+                    except Exception:
+                        continue
     
     async def completions(
         self,

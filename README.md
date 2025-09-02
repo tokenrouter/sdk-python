@@ -89,7 +89,42 @@ print(f"Cost: ${response.cost_usd:.6f}")
 print(f"Model used: {response.model}")
 ```
 
-### Async Usage
+### Native Create (/route)
+
+Use the native TokenRouter endpoint with OpenAI-like request/response plus TokenRouter metadata:
+
+```python
+from tokenrouter import TokenRouter
+
+client = TokenRouter(api_key="tr_your-api-key", base_url="http://localhost:8000")
+
+# Non-streaming
+resp = client.create(
+    messages=[
+        {"role": "developer", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"}
+    ],
+    model="auto",
+    mode="balanced",
+    model_preferences=["gpt-4o", "gpt-4o-mini"],
+)
+print(resp.choices[0].message.content)
+print(resp.cost_usd, resp.latency_ms, resp.routed_model)
+
+# Streaming
+for chunk in client.create(
+    messages=[
+        {"role": "developer", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Stream a short greeting."}
+    ],
+    model="auto",
+    stream=True,
+):
+    if chunk.choices and chunk.choices[0].get("delta", {}).get("content"):
+        print(chunk.choices[0]["delta"]["content"], end="")
+```
+
+### Async Usage (chat completions)
 
 ```python
 import asyncio
@@ -103,7 +138,7 @@ async def main():
     )
     
     # Async completion
-    response = await client.chat.create(
+    response = await client.chat.completions.create(
         messages=[
             {"role": "user", "content": "Explain quantum computing"}
         ],
@@ -182,9 +217,9 @@ for chunk in stream:
     if chunk.choices[0].delta.content:
         print(chunk.choices[0].delta.content, end="")
 
-# Async streaming
+# Async streaming (chat)
 async def stream_response():
-    stream = await async_client.chat.create(
+    stream = await async_client.chat.completions.create(
         messages=[{"role": "user", "content": "Count to 10"}],
         stream=True
     )
@@ -227,22 +262,26 @@ if response.tool_calls:
         print(f"Arguments: {tool_call.function.arguments}")
 ```
 
-### Direct Completions
-
-Simple completion interface:
+### OpenAI Completions (Legacy)
 
 ```python
-# Quick completion
-response = client.completions("Translate 'Hello' to French")
-print(response.content)
-
-# With parameters
-response = client.completions(
-    "Write a Python function for binary search",
+# Non-streaming
+resp = client.completions.create(
+    prompt="Say this is a test",
     model="auto",
-    temperature=0.2,
-    max_tokens=500
+    mode="balanced",
+    model_preferences=["gpt-4o", "gpt-4o-mini"],
 )
+print(resp["choices"][0]["text"])  # text completion shape
+
+# Streaming
+for chunk in client.completions.create(
+    prompt="Stream this as text",
+    model="auto",
+    stream=True,
+):
+    if chunk.get("choices"):
+        print(chunk["choices"][0].get("text", ""), end="")
 ```
 
 ## Advanced Usage
