@@ -4,18 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tokenrouter"
-version = "1.0.0"
+version = "1.0.1"
 description = "Python SDK for TokenRouter - Intelligent LLM Routing API"
 readme = "README.md"
 authors = [
     {name = "TokenRouter Team", email = "support@tokenrouter.io"}
 ]
-license = {text = "MIT"}
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries :: Python Modules",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
@@ -44,8 +42,8 @@ dev = [
 [project.urls]
 Homepage = "https://tokenrouter.io"
 Documentation = "https://docs.tokenrouter.io"
-Repository = "https://github.com/tokenrouter/tokenrouter-python"
-"Bug Reports" = "https://github.com/tokenrouter/tokenrouter-python/issues"
+Repository = "https://github.com/tokenrouter/sdk-python"
+"Bug Reports" = "https://github.com/tokenrouter/sdk-python/issues"
 
 [tool.setuptools]
 packages = ["tokenrouter"]
