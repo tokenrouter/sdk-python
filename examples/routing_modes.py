@@ -6,14 +6,14 @@ Demonstrates cost, quality, latency, and balanced routing strategies
 
 import os
 import asyncio
-from tokenrouter import Client, AsyncClient
+from tokenrouter import TokenRouter, AsyncTokenRouter
 
 def sync_routing_modes_example():
     """Demonstrate different routing modes with synchronous client"""
     print("TokenRouter Routing Modes Example (Sync)\n")
     
     # Initialize client
-    client = Client(
+    client = TokenRouter(
         api_key=os.getenv("TOKENROUTER_API_KEY"),
         base_url=os.getenv("TOKENROUTER_BASE_URL", "http://localhost:8000")
     )
@@ -71,7 +71,7 @@ async def async_routing_modes_example():
     """Demonstrate routing modes with async client"""
     print("TokenRouter Routing Modes Example (Async)\n")
     
-    async with AsyncClient(
+    async with AsyncTokenRouter(
         api_key=os.getenv("TOKENROUTER_API_KEY"),
         base_url=os.getenv("TOKENROUTER_BASE_URL", "http://localhost:8000")
     ) as client:
@@ -114,7 +114,7 @@ def streaming_with_mode_example():
     """Demonstrate streaming with routing modes"""
     print("Streaming with Routing Mode Example\n")
     
-    client = Client(
+    client = TokenRouter(
         api_key=os.getenv("TOKENROUTER_API_KEY"),
         base_url=os.getenv("TOKENROUTER_BASE_URL", "http://localhost:8000")
     )
@@ -150,7 +150,7 @@ def mode_selection_strategy():
     """Demonstrate when to use each routing mode"""
     print("Mode Selection Strategy Guide\n")
     
-    client = Client(
+    client = TokenRouter(
         api_key=os.getenv("TOKENROUTER_API_KEY"),
         base_url=os.getenv("TOKENROUTER_BASE_URL", "http://localhost:8000")
     )

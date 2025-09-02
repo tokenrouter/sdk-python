@@ -2,13 +2,13 @@
 Basic usage examples for TokenRouter SDK
 """
 
-from tokenrouter import Client
+from tokenrouter import TokenRouter
 import os
 
 
 def main():
     # Initialize client (uses TOKENROUTER_API_KEY from environment)
-    client = Client(
+    client = TokenRouter(
         api_key=os.getenv("TOKENROUTER_API_KEY", "your-api-key"),
         base_url=os.getenv("TOKENROUTER_BASE_URL", "http://localhost:8000")
     )

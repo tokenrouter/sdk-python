@@ -4,16 +4,16 @@ Async usage examples for TokenRouter SDK
 
 import asyncio
 import os
-from tokenrouter import AsyncClient
+from tokenrouter import AsyncTokenRouter
 
 
-async def simple_completion(client: AsyncClient, prompt: str):
+async def simple_completion(client: AsyncTokenRouter, prompt: str):
     """Simple async completion"""
     response = await client.completions(prompt)
     return response.content
 
 
-async def chat_completion(client: AsyncClient):
+async def chat_completion(client: AsyncTokenRouter):
     """Async chat completion"""
     response = await client.chat.create(
         messages=[
@@ -26,7 +26,7 @@ async def chat_completion(client: AsyncClient):
     return response.content
 
 
-async def batch_processing(client: AsyncClient):
+async def batch_processing(client: AsyncTokenRouter):
     """Process multiple prompts concurrently"""
     prompts = [
         "What is machine learning?",
@@ -45,7 +45,7 @@ async def batch_processing(client: AsyncClient):
     return list(zip(prompts, results))
 
 
-async def streaming_example(client: AsyncClient):
+async def streaming_example(client: AsyncTokenRouter):
     """Async streaming example"""
     print("Streaming response:")
     print("-" * 30)
@@ -69,7 +69,7 @@ async def streaming_example(client: AsyncClient):
     return full_response
 
 
-async def concurrent_operations(client: AsyncClient):
+async def concurrent_operations(client: AsyncTokenRouter):
     """Run multiple operations concurrently"""
     tasks = [
         client.list_models(),
@@ -87,7 +87,7 @@ async def main():
     print("=" * 50)
     
     # Initialize async client
-    async with AsyncClient(
+    async with AsyncTokenRouter(
         api_key=os.getenv("TOKENROUTER_API_KEY", "your-api-key"),
         base_url=os.getenv("TOKENROUTER_BASE_URL", "http://localhost:8000")
     ) as client:

@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch, MagicMock
 import httpx
 
 from tokenrouter import (
-    Client,
-    AsyncClient,
+    TokenRouter,
+    AsyncTokenRouter,
     ChatCompletion,
     ChatCompletionMessage,
     AuthenticationError,
@@ -24,14 +24,14 @@ class TestClient:
     
     def test_client_init_with_api_key(self):
         """Test client initialization with API key"""
-        client = Client(api_key="test-key")
+        client = TokenRouter(api_key="test-key")
         assert client.api_key == "test-key"
         assert client.base_url == "http://localhost:8000"
     
     def test_client_init_from_env(self):
         """Test client initialization from environment variables"""
         with patch.dict(os.environ, {"TOKENROUTER_API_KEY": "env-key", "TOKENROUTER_BASE_URL": "https://api.example.com"}):
-            client = Client()
+            client = TokenRouter()
             assert client.api_key == "env-key"
             assert client.base_url == "https://api.example.com"
     
@@ -39,7 +39,7 @@ class TestClient:
         """Test client initialization without API key raises error"""
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(AuthenticationError):
-                Client()
+                TokenRouter()
     
     @patch("httpx.Client.request")
     def test_chat_completion(self, mock_request):
@@ -69,7 +69,7 @@ class TestClient:
         }
         mock_request.return_value = mock_response
         
-        client = Client(api_key="test-key")
+        client = TokenRouter(api_key="test-key")
         response = client.chat.create(
             messages=[{"role": "user", "content": "Hello"}],
             model="gpt-3.5-turbo"
@@ -108,7 +108,7 @@ class TestClient:
         }
         mock_request.return_value = mock_response
         
-        client = Client(api_key="test-key")
+        client = TokenRouter(api_key="test-key")
         response = client.completions("Test prompt")
         
         assert isinstance(response, ChatCompletion)
@@ -137,7 +137,7 @@ class TestClient:
         }
         mock_request.return_value = mock_response
         
-        client = Client(api_key="test-key")
+        client = TokenRouter(api_key="test-key")
         models = client.list_models()
         
         assert len(models) == 2
@@ -156,7 +156,7 @@ class TestClient:
         }
         mock_request.return_value = mock_response
         
-        client = Client(api_key="test-key")
+        client = TokenRouter(api_key="test-key")
         costs = client.get_costs()
         
         assert costs["gpt-3.5-turbo"] == 0.001
@@ -175,7 +175,7 @@ class TestClient:
             response=mock_response
         )
         
-        client = Client(api_key="invalid-key")
+        client = TokenRouter(api_key="invalid-key")
         with pytest.raises(AuthenticationError) as exc_info:
             client.health_check()
         
@@ -195,7 +195,7 @@ class TestClient:
             response=mock_response
         )
         
-        client = Client(api_key="test-key")
+        client = TokenRouter(api_key="test-key")
         with pytest.raises(RateLimitError) as exc_info:
             client.health_check()
         
@@ -219,7 +219,7 @@ class TestClient:
             mock_response_200
         ]
         
-        client = Client(api_key="test-key", max_retries=3)
+        client = TokenRouter(api_key="test-key", max_retries=3)
         with patch("time.sleep"):  # Mock sleep to speed up test
             result = client.health_check()
         
@@ -233,7 +233,7 @@ class TestAsyncClient:
     @pytest.mark.asyncio
     async def test_async_client_init(self):
         """Test async client initialization"""
-        client = AsyncClient(api_key="test-key")
+        client = AsyncTokenRouter(api_key="test-key")
         assert client.api_key == "test-key"
         await client.close()
     
@@ -266,7 +266,7 @@ class TestAsyncClient:
         }
         mock_request.return_value = mock_response
         
-        async with AsyncClient(api_key="test-key") as client:
+        async with AsyncTokenRouter(api_key="test-key") as client:
             response = await client.chat.create(
                 messages=[{"role": "user", "content": "Hello"}],
                 model="gpt-3.5-turbo"
@@ -278,7 +278,7 @@ class TestAsyncClient:
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
         """Test async context manager"""
-        async with AsyncClient(api_key="test-key") as client:
+        async with AsyncTokenRouter(api_key="test-key") as client:
             assert client.api_key == "test-key"
         # Client should be closed after context
 

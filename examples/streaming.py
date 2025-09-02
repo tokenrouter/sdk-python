@@ -3,12 +3,12 @@ Streaming example for TokenRouter SDK
 """
 
 import os
-from tokenrouter import Client
+from tokenrouter import TokenRouter
 
 
 def main():
     # Initialize client
-    client = Client(
+    client = TokenRouter(
         api_key=os.getenv("TOKENROUTER_API_KEY", "your-api-key"),
         base_url=os.getenv("TOKENROUTER_BASE_URL", "http://localhost:8000")
     )
