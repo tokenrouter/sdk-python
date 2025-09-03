@@ -19,7 +19,7 @@ def main():
     
     try:
         # Create a streaming chat completion
-        stream = client.chat.create(
+        stream = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "You are a creative writer"},
                 {"role": "user", "content": "Write a very short story (3 sentences) about a robot learning to paint"}

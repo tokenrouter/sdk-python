@@ -24,7 +24,7 @@ class TestClient:
     
     def test_client_init_with_api_key(self):
         """Test client initialization with API key"""
-        client = TokenRouter(api_key="test-key")
+        client = TokenRouter(api_key="test-key", base_url="http://localhost:8000")
         assert client.api_key == "test-key"
         assert client.base_url == "http://localhost:8000"
     
@@ -70,7 +70,7 @@ class TestClient:
         mock_request.return_value = mock_response
         
         client = TokenRouter(api_key="test-key")
-        response = client.chat.create(
+        response = client.chat.completions.create(
             messages=[{"role": "user", "content": "Hello"}],
             model="gpt-3.5-turbo"
         )
@@ -80,87 +80,9 @@ class TestClient:
         assert response.content == "Hello! How can I help you?"
         assert response.usage.total_tokens == 30
     
-    @patch("httpx.Client.request")
-    def test_completions_shorthand(self, mock_request):
-        """Test completions shorthand method"""
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "id": "chat-123",
-            "object": "chat.completion",
-            "created": 1234567890,
-            "model": "gpt-3.5-turbo",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Response text"
-                    },
-                    "finish_reason": "stop"
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 20,
-                "total_tokens": 30
-            }
-        }
-        mock_request.return_value = mock_response
-        
-        client = TokenRouter(api_key="test-key")
-        response = client.completions("Test prompt")
-        
-        assert isinstance(response, ChatCompletion)
-        assert response.content == "Response text"
+    # Deprecated shorthand removed: use chat.completions.create instead
     
-    @patch("httpx.Client.request")
-    def test_list_models(self, mock_request):
-        """Test listing models"""
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "models": [
-                {
-                    "id": "gpt-3.5-turbo",
-                    "provider": "openai",
-                    "capabilities": ["chat"],
-                    "context_window": 4096
-                },
-                {
-                    "id": "claude-3-haiku",
-                    "provider": "anthropic",
-                    "capabilities": ["chat"],
-                    "context_window": 200000
-                }
-            ]
-        }
-        mock_request.return_value = mock_response
-        
-        client = TokenRouter(api_key="test-key")
-        models = client.list_models()
-        
-        assert len(models) == 2
-        assert models[0].id == "gpt-3.5-turbo"
-        assert models[1].provider == "anthropic"
-    
-    @patch("httpx.Client.request")
-    def test_get_costs(self, mock_request):
-        """Test getting costs"""
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "gpt-3.5-turbo": 0.001,
-            "gpt-4": 0.01,
-            "claude-3-haiku": 0.0008
-        }
-        mock_request.return_value = mock_response
-        
-        client = TokenRouter(api_key="test-key")
-        costs = client.get_costs()
-        
-        assert costs["gpt-3.5-turbo"] == 0.001
-        assert costs["claude-3-haiku"] == 0.0008
+    # Removed utility endpoints per routing-only scope
     
     @patch("httpx.Client.request")
     def test_error_handling_401(self, mock_request):
@@ -177,8 +99,10 @@ class TestClient:
         
         client = TokenRouter(api_key="invalid-key")
         with pytest.raises(AuthenticationError) as exc_info:
-            client.health_check()
-        
+            client.chat.completions.create(
+                messages=[{"role": "user", "content": "Hello"}],
+                model="auto"
+            )
         assert "Invalid API key" in str(exc_info.value)
     
     @patch("httpx.Client.request")
@@ -197,8 +121,10 @@ class TestClient:
         
         client = TokenRouter(api_key="test-key")
         with pytest.raises(RateLimitError) as exc_info:
-            client.health_check()
-        
+            client.chat.completions.create(
+                messages=[{"role": "user", "content": "Hello"}],
+                model="auto"
+            )
         assert exc_info.value.retry_after == 60
     
     @patch("httpx.Client.request")
@@ -211,7 +137,18 @@ class TestClient:
         
         mock_response_200 = Mock()
         mock_response_200.status_code = 200
-        mock_response_200.json.return_value = {"status": "healthy"}
+        mock_response_200.json.return_value = {
+            "id": "chat-ok",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "auto",
+            "choices": [{
+              "index": 0,
+              "message": {"role": "assistant", "content": "ok"},
+              "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+        }
         
         mock_request.side_effect = [
             httpx.HTTPStatusError("500 Server Error", request=Mock(), response=mock_response_500),
@@ -219,11 +156,13 @@ class TestClient:
             mock_response_200
         ]
         
-        client = TokenRouter(api_key="test-key", max_retries=3)
+        client = TokenRouter(api_key="test-key", base_url="http://localhost:8000", max_retries=3)
         with patch("time.sleep"):  # Mock sleep to speed up test
-            result = client.health_check()
-        
-        assert result["status"] == "healthy"
+            result = client.chat.completions.create(
+                messages=[{"role": "user", "content": "Hello"}],
+                model="auto"
+            )
+        assert result.id == "chat-ok"
         assert mock_request.call_count == 3
 
 
@@ -233,7 +172,7 @@ class TestAsyncClient:
     @pytest.mark.asyncio
     async def test_async_client_init(self):
         """Test async client initialization"""
-        client = AsyncTokenRouter(api_key="test-key")
+        client = AsyncTokenRouter(api_key="test-key", base_url="http://localhost:8000")
         assert client.api_key == "test-key"
         await client.close()
     
@@ -267,7 +206,7 @@ class TestAsyncClient:
         mock_request.return_value = mock_response
         
         async with AsyncTokenRouter(api_key="test-key") as client:
-            response = await client.chat.create(
+            response = await client.chat.completions.create(
                 messages=[{"role": "user", "content": "Hello"}],
                 model="gpt-3.5-turbo"
             )

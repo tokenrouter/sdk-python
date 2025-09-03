@@ -78,8 +78,8 @@ def main():
         
         print("Streaming: ", end="")
         for chunk in stream:
-            if chunk.choices[0].delta.get("content"):
-                print(chunk.choices[0].delta.content, end="", flush=True)
+            if chunk.choices and chunk.choices[0].delta.get("content"):
+                print(chunk.choices[0].delta.get("content"), end="", flush=True)
         print()
         
     except Exception as e:

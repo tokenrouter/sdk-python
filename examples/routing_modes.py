@@ -128,8 +128,9 @@ def streaming_with_mode_example():
     )
     
     for chunk in stream:
-        if chunk.choices[0].delta.content:
-            print(chunk.choices[0].delta.content, end="", flush=True)
+        delta = (chunk.choices[0].get("delta", {}) if chunk.choices else {})
+        if delta.get("content"):
+            print(delta["content"], end="", flush=True)
     print("\n")
     
     # Stream with quality mode
@@ -141,8 +142,9 @@ def streaming_with_mode_example():
     )
     
     for chunk in stream:
-        if chunk.choices[0].delta.content:
-            print(chunk.choices[0].delta.content, end="", flush=True)
+        delta = (chunk.choices[0].get("delta", {}) if chunk.choices else {})
+        if delta.get("content"):
+            print(delta["content"], end="", flush=True)
     print("\n")
 
 

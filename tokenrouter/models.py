@@ -28,7 +28,8 @@ class Usage:
 class ChatCompletionMessage:
     """Chat message"""
     role: Literal["system", "user", "assistant", "function", "tool"]
-    content: Optional[str] = None
+    # content can be string or array of content blocks (text, image, audio, etc.)
+    content: Optional[Any] = None
     name: Optional[str] = None
     function_call: Optional[Dict[str, Any]] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
@@ -87,6 +88,10 @@ class ChatCompletion:
     cost_usd: Optional[float] = None
     latency_ms: Optional[float] = None
     routed_model: Optional[str] = None
+    routed_provider: Optional[str] = None
+    service_tier: Optional[str] = None
+    prompt_type: Optional[str] = None
+    complexity: Optional[Union[int, float]] = None
     
     @property
     def content(self) -> Optional[str]:
@@ -108,6 +113,10 @@ class ChatCompletion:
             cost_usd=data.get("cost_usd"),
             latency_ms=data.get("latency_ms"),
             routed_model=data.get("routed_model"),
+            routed_provider=data.get("routed_provider"),
+            service_tier=data.get("service_tier"),
+            prompt_type=data.get("prompt_type"),
+            complexity=data.get("complexity"),
         )
 
 

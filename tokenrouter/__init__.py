@@ -11,8 +11,6 @@ from .models import (
     ChatCompletionMessage,
     ChatCompletionChoice,
     Usage,
-    Model,
-    ModelCosts,
 )
 from .exceptions import (
     TokenRouterError,
@@ -23,7 +21,7 @@ from .exceptions import (
     APIStatusError,
 )
 
-__version__ = "1.0.3"
+__version__ = "1.0.5"
 __all__ = [
     "TokenRouter",
     "AsyncTokenRouter",
@@ -31,8 +29,6 @@ __all__ = [
     "ChatCompletionMessage",
     "ChatCompletionChoice",
     "Usage",
-    "Model",
-    "ModelCosts",
     "TokenRouterError",
     "AuthenticationError",
     "RateLimitError",

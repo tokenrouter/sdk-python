@@ -8,14 +8,17 @@ from tokenrouter import AsyncTokenRouter
 
 
 async def simple_completion(client: AsyncTokenRouter, prompt: str):
-    """Simple async completion"""
-    response = await client.completions(prompt)
-    return response.content
+    """Simple async completion via legacy completions endpoint"""
+    response = await client.completions.create(prompt=prompt, model="auto")
+    # The legacy completions returns OpenAI text completion shape; extract text
+    if isinstance(response, dict) and response.get("choices"):
+        return response["choices"][0].get("text", "")
+    return ""
 
 
 async def chat_completion(client: AsyncTokenRouter):
     """Async chat completion"""
-    response = await client.chat.create(
+    response = await client.chat.completions.create(
         messages=[
             {"role": "system", "content": "You are a helpful assistant"},
             {"role": "user", "content": "What are the benefits of async programming?"}
@@ -23,7 +26,7 @@ async def chat_completion(client: AsyncTokenRouter):
         model="auto",
         max_tokens=150
     )
-    return response.content
+    return response.choices[0].message.content
 
 
 async def batch_processing(client: AsyncTokenRouter):
@@ -50,7 +53,7 @@ async def streaming_example(client: AsyncTokenRouter):
     print("Streaming response:")
     print("-" * 30)
     
-    stream = await client.chat.create(
+    stream = await client.chat.completions.create(
         messages=[
             {"role": "user", "content": "Count from 1 to 5 slowly"}
         ],
