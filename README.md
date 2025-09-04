@@ -170,13 +170,13 @@ export MISTRAL_API_KEY=...
 export DEEPSEEK_API_KEY=...
 export META_API_KEY=...
 
-When `key_mode` is `inline`, `mixed`, or `auto` (native `/route` only), the SDK:
-- Auto-loads provider keys from your environment or local `.env` (dev/CI) with the names above
-- Encrypts keys client-side using the API's published public key (fetched from `/.well-known/tr-public-key`)
-- Sends the encrypted bundle in the `X-TR-Provider-Keys` header (not in JSON)
-- Never persists or logs provider secrets
+# When `key_mode` is `inline`, `mixed`, or `auto` (native `/route` only), the SDK:
+# - Auto-loads provider keys from your environment or local `.env` (dev/CI) with the names above
+# - Encrypts keys client-side using the API's published public key (fetched from `/.well-known/tr-public-key`)
+# - Sends the encrypted bundle in the `X-TR-Provider-Keys` header (not in JSON)
+# - Never persists or logs provider secrets
 
-Note: `key_mode` is not used on the OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/completions`).
+# Note: `key_mode` is not available on the OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/completions`).
 ```
 
 ## Using OpenAI SDK against TokenRouter
