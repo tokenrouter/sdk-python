@@ -9,7 +9,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="tokenrouter",
-    version="1.0.5",
+    version="1.0.8",
     author="TokenRouter Team",
     author_email="support@tokenrouter.io",
     description="Python SDK for TokenRouter - Intelligent LLM Routing API",
@@ -33,6 +33,7 @@ setup(
     install_requires=[
         "httpx>=0.24.0",
         "typing-extensions>=4.0.0",
+        "cryptography>=41.0.0",
     ],
     extras_require={
         "dev": [

@@ -27,6 +27,7 @@ from .exceptions import (
     TimeoutError,
     QuotaExceededError,
 )
+from .crypto import encrypt_provider_keys_header
 
 
 class TextCompletionChoice(TypedDict, total=False):
@@ -77,6 +78,67 @@ class BaseClient:
         }
         if headers:
             self.headers.update(headers)
+        # Cache for public key
+        self._tr_public_key_pem: Optional[str] = None
+
+    def _load_env_provider_keys(self) -> Dict[str, str]:
+        """Load provider keys from environment or a local .env file in CWD, if present."""
+        keys: Dict[str, str] = {}
+        # Try reading .env for dev/CI if not already in env
+        env_path = os.path.join(os.getcwd(), ".env")
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k not in os.environ:
+                            os.environ[k] = v
+            except Exception:
+                pass
+        mapping = {
+            "openai": os.environ.get("OPENAI_API_KEY"),
+            "anthropic": os.environ.get("ANTHROPIC_API_KEY"),
+            "mistral": os.environ.get("MISTRAL_API_KEY"),
+            "deepseek": os.environ.get("DEEPSEEK_API_KEY"),
+            "google": os.environ.get("GEMINI_API_KEY"),
+            "meta": os.environ.get("META_API_KEY"),
+        }
+        for k, v in mapping.items():
+            if v:
+                keys[k] = v
+        return keys
+
+    def _fetch_public_key(self) -> str:
+        if self._tr_public_key_pem:
+            return self._tr_public_key_pem
+        url = urljoin(self.base_url, "/.well-known/tr-public-key")
+        try:
+            resp = httpx.get(url, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            pem = data.get("public_key_pem")
+            if not pem:
+                raise ValueError("missing public_key_pem")
+            self._tr_public_key_pem = pem
+            return pem
+        except Exception as e:
+            raise APIConnectionError(f"Failed to obtain public key: {e}")
+
+    def _build_secure_headers(self, key_mode: Optional[str]) -> Dict[str, str]:
+        mode = (key_mode or "auto").lower()
+        if mode == "stored":
+            return {}
+        provider_keys = self._load_env_provider_keys()
+        if not provider_keys:
+            return {}
+        pem = self._fetch_public_key()
+        header_value = encrypt_provider_keys_header(provider_keys, pem)
+        return {"X-TR-Provider-Keys": header_value}
 
     def _handle_response_error(self, response: Response) -> None:
         """Handle HTTP response errors"""
@@ -185,7 +247,6 @@ class ChatCompletions:
             payload["seed"] = seed
 
         payload.update(kwargs)
-
         if stream:
             return self.client._stream_request("/v1/chat/completions", payload)
         response = self.client._request("POST", "/v1/chat/completions", json=payload)
@@ -238,7 +299,6 @@ class LegacyCompletions:
         if stop is not None:
             payload["stop"] = stop
         payload.update(kwargs)
-
         if stream:
             return self.client._stream_request_raw("/v1/completions", payload)
         return self.client._request("POST", "/v1/completions", json=payload)
@@ -293,6 +353,7 @@ class TokenRouter(BaseClient):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        key_mode: Optional[str] = None,
         **kwargs,
     ) -> Union[ChatCompletion, Iterator[ChatCompletionChunk]]:
         messages_dict: List[Dict[str, Any]] = []
@@ -333,11 +394,13 @@ class TokenRouter(BaseClient):
             payload["tool_choice"] = tool_choice
         if response_format is not None:
             payload["response_format"] = response_format
+        if key_mode is not None:
+            payload["key_mode"] = key_mode
         payload.update(kwargs)
-
+        extra_headers = self._build_secure_headers(key_mode)
         if stream:
-            return self._stream_request("/route", payload)
-        response = self._request("POST", "/route", json=payload)
+            return self._stream_request("/route", payload, extra_headers)
+        response = self._request("POST", "/route", json=payload, extra_headers=extra_headers)
         return ChatCompletion.from_dict(response)
 
     def _request(
@@ -347,10 +410,14 @@ class TokenRouter(BaseClient):
         json: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
         retry_count: int = 0,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         url = urljoin(self.base_url, path)
         try:
-            response = self.client.request(method, url, json=json, params=params)
+            headers = self.headers.copy()
+            if extra_headers:
+                headers.update(extra_headers)
+            response = self.client.request(method, url, json=json, params=params, headers=headers)
             response.raise_for_status()
             return response.json()
         except httpx.TimeoutException as e:
@@ -369,9 +436,13 @@ class TokenRouter(BaseClient):
         self,
         path: str,
         json: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Iterator[ChatCompletionChunk]:
         url = urljoin(self.base_url, path)
-        with self.client.stream("POST", url, json=json) as response:
+        headers = self.headers.copy()
+        if extra_headers:
+            headers.update(extra_headers)
+        with self.client.stream("POST", url, json=json, headers=headers) as response:
             try:
                 response.raise_for_status()
             except HTTPStatusError:
@@ -387,9 +458,13 @@ class TokenRouter(BaseClient):
         self,
         path: str,
         json: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Iterator[Dict[str, Any]]:
         url = urljoin(self.base_url, path)
-        with self.client.stream("POST", url, json=json) as response:
+        headers = self.headers.copy()
+        if extra_headers:
+            headers.update(extra_headers)
+        with self.client.stream("POST", url, json=json, headers=headers) as response:
             try:
                 response.raise_for_status()
             except HTTPStatusError:
@@ -479,7 +554,6 @@ class AsyncChatCompletions:
         if seed is not None:
             payload["seed"] = seed
         payload.update(kwargs)
-
         if stream:
             return self.client._stream_request("/v1/chat/completions", payload)
         response = await self.client._request("POST", "/v1/chat/completions", json=payload)
@@ -530,7 +604,6 @@ class AsyncLegacyCompletions:
         if stop is not None:
             payload["stop"] = stop
         payload.update(kwargs)
-
         if stream:
             return self.client._stream_request_raw("/v1/completions", payload)
         return await self.client._request("POST", "/v1/completions", json=payload)
@@ -584,6 +657,7 @@ class AsyncTokenRouter(BaseClient):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        key_mode: Optional[str] = None,
         **kwargs,
     ) -> Union[ChatCompletion, AsyncIterator[ChatCompletionChunk]]:
         messages_dict: List[Dict[str, Any]] = []
@@ -624,11 +698,13 @@ class AsyncTokenRouter(BaseClient):
             payload["tool_choice"] = tool_choice
         if response_format is not None:
             payload["response_format"] = response_format
+        if key_mode is not None:
+            payload["key_mode"] = key_mode
         payload.update(kwargs)
-
+        extra_headers = self._build_secure_headers(key_mode)
         if stream:
-            return self._stream_request("/route", payload)
-        response = await self._request("POST", "/route", json=payload)
+            return self._stream_request("/route", payload, extra_headers)
+        response = await self._request("POST", "/route", json=payload, extra_headers=extra_headers)
         return ChatCompletion.from_dict(response)
 
     async def _request(
@@ -638,10 +714,14 @@ class AsyncTokenRouter(BaseClient):
         json: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
         retry_count: int = 0,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         url = urljoin(self.base_url, path)
         try:
-            response = await self.client.request(method, url, json=json, params=params)
+            headers = self.headers.copy()
+            if extra_headers:
+                headers.update(extra_headers)
+            response = await self.client.request(method, url, json=json, params=params, headers=headers)
             response.raise_for_status()
             return response.json()
         except httpx.TimeoutException as e:
@@ -660,9 +740,13 @@ class AsyncTokenRouter(BaseClient):
         self,
         path: str,
         json: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         url = urljoin(self.base_url, path)
-        async with self.client.stream("POST", url, json=json) as response:
+        headers = self.headers.copy()
+        if extra_headers:
+            headers.update(extra_headers)
+        async with self.client.stream("POST", url, json=json, headers=headers) as response:
             try:
                 response.raise_for_status()
             except HTTPStatusError:
@@ -678,9 +762,13 @@ class AsyncTokenRouter(BaseClient):
         self,
         path: str,
         json: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         url = urljoin(self.base_url, path)
-        async with self.client.stream("POST", url, json=json) as response:
+        headers = self.headers.copy()
+        if extra_headers:
+            headers.update(extra_headers)
+        async with self.client.stream("POST", url, json=json, headers=headers) as response:
             try:
                 response.raise_for_status()
             except HTTPStatusError:
