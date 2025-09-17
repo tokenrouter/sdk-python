@@ -12,7 +12,7 @@ setup(
     version="1.0.15",
     author="TokenRouter Team",
     author_email="support@tokenrouter.io",
-    description="OpenAI Responses API compatible client for TokenRouter",
+    description="Python SDK for TokenRouter - Intelligent LLM Routing API",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/tokenrouter/sdk-python",
