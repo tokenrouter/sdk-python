@@ -1,38 +1,51 @@
 """
-TokenRouter SDK - Intelligent LLM Routing Client
-
-A Python SDK for the TokenRouter API that provides intelligent routing
-to multiple LLM providers with cost optimization.
+TokenRouter SDK - OpenAI Responses API Compatible Client
 """
 
-from .client import TokenRouter, AsyncTokenRouter
-from .models import (
-    ChatCompletion,
-    ChatCompletionMessage,
-    ChatCompletionChoice,
-    Usage,
-)
-from .exceptions import (
+from .client import TokenRouter
+from .errors import (
     TokenRouterError,
     AuthenticationError,
     RateLimitError,
     InvalidRequestError,
     APIConnectionError,
     APIStatusError,
+    QuotaExceededError,
+)
+from .types import (
+    ResponsesCreateParams,
+    Response,
+    ResponseStreamEvent,
+    InputItem,
+    OutputItem,
+    ContentItem,
+    ToolCall,
+    FunctionCall,
+    Tool,
+    FunctionTool,
 )
 
-__version__ = "1.0.8"
+__version__ = "1.0.15"
 __all__ = [
     "TokenRouter",
-    "AsyncTokenRouter",
-    "ChatCompletion",
-    "ChatCompletionMessage",
-    "ChatCompletionChoice",
-    "Usage",
     "TokenRouterError",
     "AuthenticationError",
     "RateLimitError",
     "InvalidRequestError",
     "APIConnectionError",
     "APIStatusError",
+    "QuotaExceededError",
+    "ResponsesCreateParams",
+    "Response",
+    "ResponseStreamEvent",
+    "InputItem",
+    "OutputItem",
+    "ContentItem",
+    "ToolCall",
+    "FunctionCall",
+    "Tool",
+    "FunctionTool",
 ]
+
+# Default export for OpenAI-like usage
+default = TokenRouter

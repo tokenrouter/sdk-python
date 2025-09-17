@@ -9,16 +9,16 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="tokenrouter",
-    version="1.0.8",
+    version="1.0.15",
     author="TokenRouter Team",
     author_email="support@tokenrouter.io",
-    description="Python SDK for TokenRouter - Intelligent LLM Routing API",
+    description="OpenAI Responses API compatible client for TokenRouter",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/tokenrouter/sdk-python",
     packages=find_packages(exclude=["tests", "tests.*", "examples", "examples.*"]),
     classifiers=[
-        "Development Status :: 4 - Beta",
+        "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Programming Language :: Python :: 3",
@@ -28,17 +28,16 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "License :: OSI Approved :: MIT License",
     ],
     python_requires=">=3.7",
     install_requires=[
         "httpx>=0.24.0",
         "typing-extensions>=4.0.0",
-        "cryptography>=41.0.0",
     ],
     extras_require={
         "dev": [
             "pytest>=7.0.0",
-            "pytest-asyncio>=0.21.0",
             "pytest-cov>=4.0.0",
             "black>=23.0.0",
             "isort>=5.0.0",
@@ -51,4 +50,5 @@ setup(
         "Source": "https://github.com/tokenrouter/sdk-python",
         "Documentation": "https://docs.tokenrouter.io",
     },
+    license="MIT",
 )

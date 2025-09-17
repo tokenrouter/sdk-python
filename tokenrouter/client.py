@@ -1,329 +1,267 @@
 """
 TokenRouter SDK Client
+OpenAI Responses API Compatible
 """
 
 import os
+import json
 import time
-import json as jsonlib
-import asyncio
-from typing import Optional, Dict, Any, List, Union, AsyncIterator, Iterator
-from urllib.parse import urljoin
+from typing import Optional, Dict, Any, AsyncIterator, Iterator, Union
+from dataclasses import asdict
 import httpx
-from httpx import Response, HTTPStatusError
-from typing import TypedDict
 
-from .models import (
-    ChatCompletion,
-    ChatCompletionMessage,
-    ChatCompletionChunk,
+from .types import (
+    ResponsesCreateParams,
+    Response,
+    ResponseStreamEvent,
+    OutputItem,
+    InputItemsList,
+    ResponseDelta,
 )
-from .exceptions import (
+from .errors import (
     TokenRouterError,
     AuthenticationError,
     RateLimitError,
     InvalidRequestError,
     APIConnectionError,
     APIStatusError,
-    TimeoutError,
     QuotaExceededError,
 )
-from .crypto import encrypt_provider_keys_header
 
 
-class TextCompletionChoice(TypedDict, total=False):
-    text: str
-    index: int
-    logprobs: Optional[Dict[str, Any]]
-    finish_reason: Optional[str]
-
-
-class TextCompletion(TypedDict, total=False):
-    id: str
-    object: str
-    created: int
-    model: str
-    choices: List[TextCompletionChoice]
-    usage: Optional[Dict[str, int]]
-
-
-class BaseClient:
-    """Base client with common functionality"""
-
-    DEFAULT_BASE_URL = "https://api.tokenrouter.io"
-    DEFAULT_TIMEOUT = 60.0
-    DEFAULT_MAX_RETRIES = 3
+class TokenRouter:
+    """TokenRouter client - OpenAI Responses API compatible"""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
+        timeout: Optional[float] = 60.0,
+        max_retries: int = 3,
         headers: Optional[Dict[str, str]] = None,
+        verify_ssl: bool = True,
     ):
-        self.api_key = api_key or os.environ.get("TOKENROUTER_API_KEY")
+        """
+        Initialize TokenRouter client
+
+        Args:
+            api_key: API key for TokenRouter. Defaults to TOKENROUTER_API_KEY env var
+            base_url: Base URL for API. Defaults to https://api.tokenrouter.io/api
+            timeout: Request timeout in seconds
+            max_retries: Maximum number of retries for failed requests
+            headers: Additional headers to include in requests
+            verify_ssl: Whether to verify SSL certificates (set False for testing)
+        """
+        self.api_key = api_key or os.environ.get("TOKENROUTER_API_KEY", "")
         if not self.api_key:
             raise AuthenticationError(
                 "API key is required. Set TOKENROUTER_API_KEY environment variable or pass api_key parameter."
             )
 
-        self.base_url = (base_url or os.environ.get("TOKENROUTER_BASE_URL", self.DEFAULT_BASE_URL)).rstrip("/")
-        self.timeout = timeout or self.DEFAULT_TIMEOUT
-        self.max_retries = max_retries or self.DEFAULT_MAX_RETRIES
+        self.base_url = (
+            base_url or os.environ.get("TOKENROUTER_BASE_URL", "https://api.tokenrouter.io/api")
+        ).rstrip("/")
+        self.timeout = timeout
+        self.max_retries = max_retries
 
-        self.headers = {
+        # Set up headers
+        self._headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "tokenrouter-python/1.0.5",
+            "User-Agent": "tokenrouter-python/1.0.9",
         }
         if headers:
-            self.headers.update(headers)
-        # Cache for public key
-        self._tr_public_key_pem: Optional[str] = None
+            self._headers.update(headers)
 
-    def _load_env_provider_keys(self) -> Dict[str, str]:
-        """Load provider keys from environment or a local .env file in CWD, if present."""
-        keys: Dict[str, str] = {}
-        # Try reading .env for dev/CI if not already in env
-        env_path = os.path.join(os.getcwd(), ".env")
-        if os.path.exists(env_path):
-            try:
-                with open(env_path, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#") or "=" not in line:
-                            continue
-                        k, v = line.split("=", 1)
-                        k = k.strip()
-                        v = v.strip().strip('"').strip("'")
-                        if k not in os.environ:
-                            os.environ[k] = v
-            except Exception:
-                pass
-        mapping = {
-            "openai": os.environ.get("OPENAI_API_KEY"),
-            "anthropic": os.environ.get("ANTHROPIC_API_KEY"),
-            "mistral": os.environ.get("MISTRAL_API_KEY"),
-            "deepseek": os.environ.get("DEEPSEEK_API_KEY"),
-            "google": os.environ.get("GEMINI_API_KEY"),
-            "meta": os.environ.get("META_API_KEY"),
-        }
-        for k, v in mapping.items():
-            if v:
-                keys[k] = v
-        return keys
-
-    def _fetch_public_key(self) -> str:
-        if self._tr_public_key_pem:
-            return self._tr_public_key_pem
-        url = urljoin(self.base_url, "/.well-known/tr-public-key")
-        try:
-            resp = httpx.get(url, timeout=self.timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            pem = data.get("public_key_pem")
-            if not pem:
-                raise ValueError("missing public_key_pem")
-            self._tr_public_key_pem = pem
-            return pem
-        except Exception as e:
-            raise APIConnectionError(f"Failed to obtain public key: {e}")
-
-    def _build_secure_headers(self, key_mode: Optional[str]) -> Dict[str, str]:
-        mode = (key_mode or "auto").lower()
-        if mode == "stored":
-            return {}
-        provider_keys = self._load_env_provider_keys()
-        if not provider_keys:
-            return {}
-        pem = self._fetch_public_key()
-        header_value = encrypt_provider_keys_header(provider_keys, pem)
-        return {"X-TR-Provider-Keys": header_value}
-
-    def _handle_response_error(self, response: Response) -> None:
-        """Handle HTTP response errors"""
-        try:
-            error_data = response.json()
-            message = error_data.get("detail", response.text)
-        except Exception:
-            message = response.text or f"HTTP {response.status_code}"
-
-        if response.status_code == 401:
-            raise AuthenticationError(message, response.status_code)
-        elif response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            raise RateLimitError(
-                message,
-                response.status_code,
-                headers=dict(response.headers),
-                retry_after=int(retry_after) if retry_after else None,
-            )
-        elif response.status_code == 400:
-            raise InvalidRequestError(message, response.status_code)
-        elif response.status_code == 403:
-            if "quota" in message.lower():
-                raise QuotaExceededError(message, response.status_code)
-            raise AuthenticationError(message, response.status_code)
-        elif response.status_code >= 500:
-            raise APIStatusError(message, response.status_code)
-        else:
-            raise TokenRouterError(message, response.status_code)
-
-
-class ChatCompletions:
-    """Chat completions interface (/v1/chat/completions)"""
-
-    def __init__(self, client: "TokenRouter"):
-        self.client = client
-
-    def create(
-        self,
-        messages: List[Union[Dict[str, Any], ChatCompletionMessage]],
-        model: str = "auto",
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: bool = False,
-        n: Optional[int] = None,
-        logprobs: Optional[bool] = None,
-        echo: Optional[bool] = None,
-        user: Optional[str] = None,
-        model_preferences: Optional[List[str]] = None,
-        mode: Optional[str] = None,  # cost | quality | latency | balanced
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        seed: Optional[int] = None,
-        **kwargs,
-    ) -> Union[ChatCompletion, Iterator[ChatCompletionChunk]]:
-
-        messages_dict: List[Dict[str, Any]] = []
-        for msg in messages:
-            if isinstance(msg, ChatCompletionMessage):
-                messages_dict.append(msg.to_dict())
-            else:
-                messages_dict.append(msg)
-
-        payload: Dict[str, Any] = {
-            "messages": messages_dict,
-            "model": model,
-            "stream": stream,
-        }
-
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if top_p is not None:
-            payload["top_p"] = top_p
-        if frequency_penalty is not None:
-            payload["frequency_penalty"] = frequency_penalty
-        if presence_penalty is not None:
-            payload["presence_penalty"] = presence_penalty
-        if stop is not None:
-            payload["stop"] = stop
-        if n is not None:
-            payload["n"] = n
-        if logprobs is not None:
-            payload["logprobs"] = logprobs
-        if echo is not None:
-            payload["echo"] = echo
-        if user is not None:
-            payload["user"] = user
-        if model_preferences is not None:
-            payload["model_preferences"] = model_preferences
-        if mode is not None:
-            payload["mode"] = mode
-        if tools is not None:
-            payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
-        if response_format is not None:
-            payload["response_format"] = response_format
-        if seed is not None:
-            payload["seed"] = seed
-
-        payload.update(kwargs)
-        if stream:
-            return self.client._stream_request("/v1/chat/completions", payload)
-        response = self.client._request("POST", "/v1/chat/completions", json=payload)
-        return ChatCompletion.from_dict(response)
-
-
-class LegacyCompletions:
-    """OpenAI legacy completions interface (/v1/completions)"""
-
-    def __init__(self, client: "TokenRouter"):
-        self.client = client
-
-    def create(
-        self,
-        prompt: Union[str, List[Union[str, int, List[int]]]],
-        model: str = "auto",
-        mode: Optional[str] = None,
-        model_preferences: Optional[List[str]] = None,
-        stream: bool = False,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        user: Optional[str] = None,
-        top_p: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        **kwargs,
-    ) -> Union[TextCompletion, Iterator[Dict[str, Any]]]:
-        payload: Dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "stream": stream,
-        }
-        if mode is not None:
-            payload["mode"] = mode
-        if model_preferences is not None:
-            payload["model_preferences"] = model_preferences
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if user is not None:
-            payload["user"] = user
-        if top_p is not None:
-            payload["top_p"] = top_p
-        if frequency_penalty is not None:
-            payload["frequency_penalty"] = frequency_penalty
-        if presence_penalty is not None:
-            payload["presence_penalty"] = presence_penalty
-        if stop is not None:
-            payload["stop"] = stop
-        payload.update(kwargs)
-        if stream:
-            return self.client._stream_request_raw("/v1/completions", payload)
-        return self.client._request("POST", "/v1/completions", json=payload)
-
-
-class ChatNamespace:
-    """Namespace for chat APIs, matching OpenAI style: client.chat.completions.create"""
-
-    def __init__(self, client: "TokenRouter"):
-        self.completions = ChatCompletions(client)
-
-
-class TokenRouter(BaseClient):
-    """Synchronous TokenRouter client"""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.client = httpx.Client(
+        # Create HTTP client
+        self._client = httpx.Client(
             base_url=self.base_url,
-            headers=self.headers,
-            timeout=self.timeout,
+            timeout=timeout,
+            headers=self._headers,
+            verify=verify_ssl,
         )
-        # Namespaced routes matching OpenAI style
-        self.chat = ChatNamespace(self)
-        self.completions = LegacyCompletions(self)
+
+        # Create responses namespace
+        self.responses = ResponsesNamespace(self)
+
+    def _handle_error_response(self, response: httpx.Response) -> None:
+        """Handle error responses from API"""
+        status_code = response.status_code
+        try:
+            data = response.json()
+            message = data.get("detail") or data.get("error") or response.text
+        except:
+            data = None
+            message = response.text or response.reason_phrase
+
+        headers = dict(response.headers)
+
+        if status_code == 401:
+            raise AuthenticationError(message, status_code, data, headers)
+        elif status_code == 429:
+            retry_after = response.headers.get("retry-after")
+            raise RateLimitError(
+                message, status_code, data, headers,
+                int(retry_after) if retry_after else None
+            )
+        elif status_code == 400:
+            raise InvalidRequestError(message, status_code, data, headers)
+        elif status_code == 403:
+            if "quota" in message.lower():
+                raise QuotaExceededError(message, status_code, data, headers)
+            raise AuthenticationError(message, status_code, data, headers)
+        elif status_code >= 500:
+            raise APIStatusError(message, status_code, data, headers)
+        else:
+            raise TokenRouterError(message, status_code, data, headers)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        json_data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        retry_count: int = 0,
+    ) -> Any:
+        """Make HTTP request with retries"""
+        try:
+            response = self._client.request(
+                method=method,
+                url=path,
+                json=json_data,
+                params=params,
+            )
+
+            if response.status_code >= 400:
+                if retry_count < self.max_retries and response.status_code >= 500:
+                    time.sleep(2 ** retry_count)
+                    return self._request(method, path, json_data, params, retry_count + 1)
+                self._handle_error_response(response)
+
+            return response.json()
+
+        except httpx.TimeoutException:
+            raise APIConnectionError("Request timed out")
+        except httpx.ConnectError as e:
+            raise APIConnectionError(f"Connection failed: {str(e)}")
+        except httpx.HTTPError as e:
+            raise TokenRouterError(f"Request failed: {str(e)}")
+
+    def _stream(
+        self,
+        method: str,
+        path: str,
+        json_data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Iterator[ResponseStreamEvent]:
+        """Make streaming HTTP request"""
+        try:
+            with self._client.stream(
+                method=method,
+                url=path,
+                json=json_data,
+                params=params,
+            ) as response:
+                if response.status_code >= 400:
+                    self._handle_error_response(response)
+
+                for line in response.iter_lines():
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        if data == "[DONE]":
+                            break
+                        try:
+                            event_data = json.loads(data)
+                            # Debug: print raw event data
+                            # print(f"DEBUG: Raw event data: {event_data}")
+                            yield self._parse_stream_event(event_data)
+                        except json.JSONDecodeError:
+                            continue
+
+        except httpx.TimeoutException:
+            raise APIConnectionError("Request timed out")
+        except httpx.ConnectError as e:
+            raise APIConnectionError(f"Connection failed: {str(e)}")
+        except httpx.HTTPError as e:
+            raise TokenRouterError(f"Request failed: {str(e)}")
+
+    def _parse_stream_event(self, data: Any) -> ResponseStreamEvent:
+        """Parse streaming event data"""
+        # Handle case where data is a list (delta chunks)
+        if isinstance(data, list):
+            # This is a delta output array
+            event = ResponseStreamEvent(type="response.delta")
+            event.delta = ResponseDelta(output=data)
+            return event
+
+        # Handle None or other non-dict data
+        if not isinstance(data, dict):
+            # Fallback for unexpected data
+            event = ResponseStreamEvent(type="unknown")
+            return event
+
+        # Handle simple delta format: {'index': 0, 'delta': {'type': 'text', 'text': 'Hello'}}
+        if "delta" in data and "index" in data:
+            delta_content = data["delta"]
+            if isinstance(delta_content, dict) and delta_content.get("type") == "text":
+                # Create a proper output structure for text delta
+                output_item = {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": delta_content.get("text", "")
+                        }
+                    ]
+                }
+                event = ResponseStreamEvent(type="response.delta")
+                event.delta = ResponseDelta(output=[output_item])
+                return event
+
+        # Handle usage stats
+        if "input_tokens" in data or "output_tokens" in data or "total_tokens" in data:
+            # This is a usage update
+            event = ResponseStreamEvent(type="usage")
+            return event
+
+        # Standard response event handling
+        event = ResponseStreamEvent(type=data.get("type", ""))
+
+        if "response" in data:
+            response_data = data["response"]
+            event.response = Response(
+                id=response_data.get("id", ""),
+                object=response_data.get("object", "realtime.response"),
+                created=response_data.get("created"),
+                model=response_data.get("model"),
+                usage=response_data.get("usage"),
+                output=response_data.get("output", []),
+                metadata=response_data.get("metadata"),
+                status=response_data.get("status"),
+                status_details=response_data.get("status_details"),
+            )
+
+        if "delta" in data and "index" not in data:
+            delta_data = data["delta"]
+            # Handle delta data which could be dict or already processed
+            if isinstance(delta_data, dict):
+                event.delta = ResponseDelta(
+                    output=delta_data.get("output"),
+                )
+            else:
+                event.delta = ResponseDelta(output=delta_data)
+
+        if "item" in data:
+            event.item = data["item"]
+
+        event.event_id = data.get("event_id")
+        event.rate_limits = data.get("rate_limits")
+
+        return event
+
+    def close(self):
+        """Close the HTTP client"""
+        self._client.close()
 
     def __enter__(self):
         return self
@@ -331,454 +269,151 @@ class TokenRouter(BaseClient):
     def __exit__(self, *args):
         self.close()
 
-    def close(self) -> None:
-        self.client.close()
 
-    # Native TokenRouter endpoint: /route
+class ResponsesNamespace:
+    """Namespace for responses operations"""
+
+    def __init__(self, client: TokenRouter):
+        self._client = client
+
     def create(
         self,
-        messages: List[Union[Dict[str, Any], ChatCompletionMessage]],
-        model: str = "auto",
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        max_completion_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: bool = False,
-        user: Optional[str] = None,
-        model_preferences: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        key_mode: Optional[str] = None,
-        **kwargs,
-    ) -> Union[ChatCompletion, Iterator[ChatCompletionChunk]]:
-        messages_dict: List[Dict[str, Any]] = []
-        for msg in messages:
-            if isinstance(msg, ChatCompletionMessage):
-                messages_dict.append(msg.to_dict())
+        params: Optional[Union[ResponsesCreateParams, Dict[str, Any]]] = None,
+        **kwargs
+    ) -> Union[Response, Iterator[ResponseStreamEvent]]:
+        """
+        Create a model response
+
+        Args:
+            params: Parameters for creating the response (dict or keyword args)
+            **kwargs: Alternative way to pass parameters as keyword arguments
+
+        Returns:
+            Response object or stream of ResponseStreamEvent
+        """
+        # Handle both dict params and keyword arguments
+        if params is not None:
+            # If params provided, use it (could be dict or TypedDict)
+            if isinstance(params, dict):
+                request_params = params
             else:
-                messages_dict.append(msg)
+                request_params = dict(params)
+        else:
+            # Use keyword arguments
+            request_params = kwargs
 
-        payload: Dict[str, Any] = {
-            "messages": messages_dict,
-            "model": model,
-            "stream": stream,
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_completion_tokens is not None:
-            payload["max_completion_tokens"] = max_completion_tokens
-        elif max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if top_p is not None:
-            payload["top_p"] = top_p
-        if frequency_penalty is not None:
-            payload["frequency_penalty"] = frequency_penalty
-        if presence_penalty is not None:
-            payload["presence_penalty"] = presence_penalty
-        if stop is not None:
-            payload["stop"] = stop
-        if user is not None:
-            payload["user"] = user
-        if model_preferences is not None:
-            payload["model_preferences"] = model_preferences
-        if mode is not None:
-            payload["mode"] = mode
-        if tools is not None:
-            payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
-        if response_format is not None:
-            payload["response_format"] = response_format
-        if key_mode is not None:
-            payload["key_mode"] = key_mode
-        payload.update(kwargs)
-        extra_headers = self._build_secure_headers(key_mode)
-        if stream:
-            return self._stream_request("/route", payload, extra_headers)
-        response = self._request("POST", "/route", json=payload, extra_headers=extra_headers)
-        return ChatCompletion.from_dict(response)
+        # Check if streaming
+        if request_params.get("stream"):
+            return self._client._stream("POST", "/v1/responses", json_data=request_params)
 
-    def _request(
-        self,
-        method: str,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        retry_count: int = 0,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
-        url = urljoin(self.base_url, path)
-        try:
-            headers = self.headers.copy()
-            if extra_headers:
-                headers.update(extra_headers)
-            response = self.client.request(method, url, json=json, params=params, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        except httpx.TimeoutException as e:
-            raise TimeoutError(f"Request timed out: {e}")
-        except httpx.ConnectError as e:
-            raise APIConnectionError(f"Connection failed: {e}")
-        except HTTPStatusError as e:
-            if retry_count < self.max_retries and e.response.status_code >= 500:
-                time.sleep(2 ** retry_count)
-                return self._request(method, path, json, params, retry_count + 1)
-            self._handle_response_error(e.response)
-        except Exception as e:
-            raise TokenRouterError(f"Unexpected error: {e}")
+        # Regular request
+        response_data = self._client._request("POST", "/v1/responses", json_data=request_params)
 
-    def _stream_request(
-        self,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Iterator[ChatCompletionChunk]:
-        url = urljoin(self.base_url, path)
-        headers = self.headers.copy()
-        if extra_headers:
-            headers.update(extra_headers)
-        with self.client.stream("POST", url, json=json, headers=headers) as response:
-            try:
-                response.raise_for_status()
-            except HTTPStatusError:
-                self._handle_response_error(response)
-            for line in response.iter_lines():
-                if line.startswith("data: "):
-                    data = line[6:]
-                    chunk = ChatCompletionChunk.from_sse_data(data)
-                    if chunk:
-                        yield chunk
-
-    def _stream_request_raw(
-        self,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Iterator[Dict[str, Any]]:
-        url = urljoin(self.base_url, path)
-        headers = self.headers.copy()
-        if extra_headers:
-            headers.update(extra_headers)
-        with self.client.stream("POST", url, json=json, headers=headers) as response:
-            try:
-                response.raise_for_status()
-            except HTTPStatusError:
-                self._handle_response_error(response)
-            for line in response.iter_lines():
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    try:
-                        yield jsonlib.loads(data)
-                    except Exception:
-                        continue
-
-    # Strict to Request_1: no additional utility endpoints
-
-
-class AsyncChatCompletions:
-    def __init__(self, client: "AsyncTokenRouter"):
-        self.client = client
-
-    async def create(
-        self,
-        messages: List[Union[Dict[str, Any], ChatCompletionMessage]],
-        model: str = "auto",
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: bool = False,
-        n: Optional[int] = None,
-        logprobs: Optional[bool] = None,
-        echo: Optional[bool] = None,
-        user: Optional[str] = None,
-        model_preferences: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        seed: Optional[int] = None,
-        **kwargs,
-    ) -> Union[ChatCompletion, AsyncIterator[ChatCompletionChunk]]:
-        messages_dict: List[Dict[str, Any]] = []
-        for msg in messages:
-            if isinstance(msg, ChatCompletionMessage):
-                messages_dict.append(msg.to_dict())
-            else:
-                messages_dict.append(msg)
-
-        payload: Dict[str, Any] = {
-            "messages": messages_dict,
-            "model": model,
-            "stream": stream,
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if top_p is not None:
-            payload["top_p"] = top_p
-        if frequency_penalty is not None:
-            payload["frequency_penalty"] = frequency_penalty
-        if presence_penalty is not None:
-            payload["presence_penalty"] = presence_penalty
-        if stop is not None:
-            payload["stop"] = stop
-        if n is not None:
-            payload["n"] = n
-        if logprobs is not None:
-            payload["logprobs"] = logprobs
-        if echo is not None:
-            payload["echo"] = echo
-        if user is not None:
-            payload["user"] = user
-        if model_preferences is not None:
-            payload["model_preferences"] = model_preferences
-        if mode is not None:
-            payload["mode"] = mode
-        if tools is not None:
-            payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
-        if response_format is not None:
-            payload["response_format"] = response_format
-        if seed is not None:
-            payload["seed"] = seed
-        payload.update(kwargs)
-        if stream:
-            return self.client._stream_request("/v1/chat/completions", payload)
-        response = await self.client._request("POST", "/v1/chat/completions", json=payload)
-        return ChatCompletion.from_dict(response)
-
-
-class AsyncLegacyCompletions:
-    def __init__(self, client: "AsyncTokenRouter"):
-        self.client = client
-
-    async def create(
-        self,
-        prompt: Union[str, List[Union[str, int, List[int]]]],
-        model: str = "auto",
-        mode: Optional[str] = None,
-        model_preferences: Optional[List[str]] = None,
-        stream: bool = False,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        user: Optional[str] = None,
-        top_p: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        **kwargs,
-    ) -> Union[TextCompletion, AsyncIterator[Dict[str, Any]]]:
-        payload: Dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "stream": stream,
-        }
-        if mode is not None:
-            payload["mode"] = mode
-        if model_preferences is not None:
-            payload["model_preferences"] = model_preferences
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if user is not None:
-            payload["user"] = user
-        if top_p is not None:
-            payload["top_p"] = top_p
-        if frequency_penalty is not None:
-            payload["frequency_penalty"] = frequency_penalty
-        if presence_penalty is not None:
-            payload["presence_penalty"] = presence_penalty
-        if stop is not None:
-            payload["stop"] = stop
-        payload.update(kwargs)
-        if stream:
-            return self.client._stream_request_raw("/v1/completions", payload)
-        return await self.client._request("POST", "/v1/completions", json=payload)
-
-
-class AsyncChatNamespace:
-    """Namespace for async chat APIs, matching OpenAI style: client.chat.completions.create"""
-
-    def __init__(self, client: "AsyncTokenRouter"):
-        self.completions = AsyncChatCompletions(client)
-
-
-class AsyncTokenRouter(BaseClient):
-    """Asynchronous TokenRouter client"""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            headers=self.headers,
-            timeout=self.timeout,
+        # Create Response object
+        response = Response(
+            id=response_data.get("id", ""),
+            object=response_data.get("object", "realtime.response"),
+            created=response_data.get("created"),
+            model=response_data.get("model"),
+            usage=response_data.get("usage"),
+            output=response_data.get("output", []),
+            metadata=response_data.get("metadata"),
+            status=response_data.get("status"),
+            status_details=response_data.get("status_details"),
         )
-        self.chat = AsyncChatNamespace(self)
-        self.completions = AsyncLegacyCompletions(self)
 
-    async def __aenter__(self):
-        return self
+        # Add convenience property output_text
+        response.output_text = self._extract_output_text(response)
 
-    async def __aexit__(self, *args):
-        await self.close()
+        return response
 
-    async def close(self) -> None:
-        await self.client.aclose()
+    def get(self, response_id: str) -> Response:
+        """
+        Get a response by ID
 
-    # Native TokenRouter endpoint: /route (async)
-    async def create(
-        self,
-        messages: List[Union[Dict[str, Any], ChatCompletionMessage]],
-        model: str = "auto",
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        max_completion_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: bool = False,
-        user: Optional[str] = None,
-        model_preferences: Optional[List[str]] = None,
-        mode: Optional[str] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        key_mode: Optional[str] = None,
-        **kwargs,
-    ) -> Union[ChatCompletion, AsyncIterator[ChatCompletionChunk]]:
-        messages_dict: List[Dict[str, Any]] = []
-        for msg in messages:
-            if isinstance(msg, ChatCompletionMessage):
-                messages_dict.append(msg.to_dict())
-            else:
-                messages_dict.append(msg)
+        Args:
+            response_id: The ID of the response to retrieve
 
-        payload: Dict[str, Any] = {
-            "messages": messages_dict,
-            "model": model,
-            "stream": stream,
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_completion_tokens is not None:
-            payload["max_completion_tokens"] = max_completion_tokens
-        elif max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if top_p is not None:
-            payload["top_p"] = top_p
-        if frequency_penalty is not None:
-            payload["frequency_penalty"] = frequency_penalty
-        if presence_penalty is not None:
-            payload["presence_penalty"] = presence_penalty
-        if stop is not None:
-            payload["stop"] = stop
-        if user is not None:
-            payload["user"] = user
-        if model_preferences is not None:
-            payload["model_preferences"] = model_preferences
-        if mode is not None:
-            payload["mode"] = mode
-        if tools is not None:
-            payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
-        if response_format is not None:
-            payload["response_format"] = response_format
-        if key_mode is not None:
-            payload["key_mode"] = key_mode
-        payload.update(kwargs)
-        extra_headers = self._build_secure_headers(key_mode)
-        if stream:
-            return self._stream_request("/route", payload, extra_headers)
-        response = await self._request("POST", "/route", json=payload, extra_headers=extra_headers)
-        return ChatCompletion.from_dict(response)
+        Returns:
+            Response object
+        """
+        response_data = self._client._request("GET", f"/v1/responses/{response_id}")
 
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        retry_count: int = 0,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
-        url = urljoin(self.base_url, path)
-        try:
-            headers = self.headers.copy()
-            if extra_headers:
-                headers.update(extra_headers)
-            response = await self.client.request(method, url, json=json, params=params, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        except httpx.TimeoutException as e:
-            raise TimeoutError(f"Request timed out: {e}")
-        except httpx.ConnectError as e:
-            raise APIConnectionError(f"Connection failed: {e}")
-        except HTTPStatusError as e:
-            if retry_count < self.max_retries and e.response.status_code >= 500:
-                await asyncio.sleep(2 ** retry_count)
-                return await self._request(method, path, json, params, retry_count + 1)
-            self._handle_response_error(e.response)
-        except Exception as e:
-            raise TokenRouterError(f"Unexpected error: {e}")
+        response = Response(
+            id=response_data.get("id", ""),
+            object=response_data.get("object", "realtime.response"),
+            created=response_data.get("created"),
+            model=response_data.get("model"),
+            usage=response_data.get("usage"),
+            output=response_data.get("output", []),
+            metadata=response_data.get("metadata"),
+            status=response_data.get("status"),
+            status_details=response_data.get("status_details"),
+        )
 
-    async def _stream_request(
-        self,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> AsyncIterator[ChatCompletionChunk]:
-        url = urljoin(self.base_url, path)
-        headers = self.headers.copy()
-        if extra_headers:
-            headers.update(extra_headers)
-        async with self.client.stream("POST", url, json=json, headers=headers) as response:
-            try:
-                response.raise_for_status()
-            except HTTPStatusError:
-                self._handle_response_error(response)
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data = line[6:]
-                    chunk = ChatCompletionChunk.from_sse_data(data)
-                    if chunk:
-                        yield chunk
+        response.output_text = self._extract_output_text(response)
 
-    async def _stream_request_raw(
-        self,
-        path: str,
-        json: Optional[Dict[str, Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        url = urljoin(self.base_url, path)
-        headers = self.headers.copy()
-        if extra_headers:
-            headers.update(extra_headers)
-        async with self.client.stream("POST", url, json=json, headers=headers) as response:
-            try:
-                response.raise_for_status()
-            except HTTPStatusError:
-                self._handle_response_error(response)
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    try:
-                        yield jsonlib.loads(data)
-                    except Exception:
-                        continue
+        return response
+
+    def delete(self, response_id: str) -> Dict[str, Any]:
+        """
+        Delete a response
+
+        Args:
+            response_id: The ID of the response to delete
+
+        Returns:
+            Deletion confirmation
+        """
+        return self._client._request("DELETE", f"/v1/responses/{response_id}")
+
+    def cancel(self, response_id: str) -> Response:
+        """
+        Cancel a background response
+
+        Args:
+            response_id: The ID of the response to cancel
+
+        Returns:
+            Updated Response object
+        """
+        response_data = self._client._request("POST", f"/v1/responses/{response_id}/cancel")
+
+        response = Response(
+            id=response_data.get("id", ""),
+            object=response_data.get("object", "realtime.response"),
+            created=response_data.get("created"),
+            model=response_data.get("model"),
+            usage=response_data.get("usage"),
+            output=response_data.get("output", []),
+            metadata=response_data.get("metadata"),
+            status=response_data.get("status"),
+            status_details=response_data.get("status_details"),
+        )
+
+        response.output_text = self._extract_output_text(response)
+
+        return response
+
+    def list_input_items(self, response_id: str) -> InputItemsList:
+        """
+        List input items for a response
+
+        Args:
+            response_id: The ID of the response
+
+        Returns:
+            InputItemsList object
+        """
+        data = self._client._request("GET", f"/v1/responses/{response_id}/input_items")
+        return data
+
+    def _extract_output_text(self, response: Response) -> str:
+        """Extract text from response output"""
+        texts = []
+        for item in response.output or []:
+            if item.get("type") == "message" and item.get("content"):
+                for content in item["content"]:
+                    if content.get("type") == "output_text" and content.get("text"):
+                        texts.append(content["text"])
+        return "".join(texts)
