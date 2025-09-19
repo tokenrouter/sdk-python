@@ -6,7 +6,7 @@ OpenAI Responses API Compatible
 import os
 import json
 import time
-from typing import Optional, Dict, Any, AsyncIterator, Iterator, Union
+from typing import Optional, Dict, Any, AsyncIterator, Iterator, Union, List, Tuple
 from dataclasses import asdict
 import httpx
 
@@ -59,7 +59,7 @@ class TokenRouter:
             )
 
         self.base_url = (
-            base_url or os.environ.get("TOKENROUTER_BASE_URL", "https://api.tokenrouter.io/api")
+            base_url or os.environ.get("TOKENROUTER_BASE_URL", "https://api.tokenrouter.io")
         ).rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
@@ -164,19 +164,78 @@ class TokenRouter:
             ) as response:
                 if response.status_code >= 400:
                     self._handle_error_response(response)
+                event_type: Optional[str] = None
+                event_id: Optional[str] = None
+                data_lines: List[str] = []
 
-                for line in response.iter_lines():
-                    if line.startswith("data: "):
-                        data = line[6:]
-                        if data == "[DONE]":
-                            break
-                        try:
-                            event_data = json.loads(data)
-                            # Debug: print raw event data
-                            # print(f"DEBUG: Raw event data: {event_data}")
-                            yield self._parse_stream_event(event_data)
-                        except json.JSONDecodeError:
-                            continue
+                def flush_event() -> Tuple[Optional[ResponseStreamEvent], bool]:
+                    nonlocal event_type, event_id, data_lines
+
+                    if not data_lines:
+                        event_type = None
+                        event_id = None
+                        return None, False
+
+                    data = "\n".join(data_lines)
+                    data_lines = []
+
+                    if data == "[DONE]":
+                        done_event = ResponseStreamEvent(type=event_type or "done")
+                        if event_id:
+                            done_event.event_id = event_id
+                        event_type = None
+                        event_id = None
+                        return done_event, True
+
+                    try:
+                        payload = json.loads(data)
+                    except json.JSONDecodeError:
+                        event_type = None
+                        event_id = None
+                        return None, False
+
+                    event = self._parse_stream_event(payload, event_type)
+                    if event_id and getattr(event, "event_id", None) is None:
+                        event.event_id = event_id
+
+                    event_type = None
+                    event_id = None
+                    return event, False
+
+                for raw_line in response.iter_lines():
+                    if isinstance(raw_line, bytes):
+                        line = raw_line.decode("utf-8")
+                    else:
+                        line = raw_line
+
+                    line = line.rstrip("\r")
+
+                    if line == "":
+                        event, should_stop = flush_event()
+                        if event:
+                            yield event
+                        if should_stop:
+                            return
+                        continue
+
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                        continue
+
+                    if line.startswith("id:"):
+                        event_id = line[3:].strip()
+                        continue
+
+                    if line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip())
+                        continue
+
+                # Flush any buffered event after the stream ends
+                event, should_stop = flush_event()
+                if event:
+                    yield event
+                if should_stop:
+                    return
 
         except httpx.TimeoutException:
             raise APIConnectionError("Request timed out")
@@ -185,19 +244,19 @@ class TokenRouter:
         except httpx.HTTPError as e:
             raise TokenRouterError(f"Request failed: {str(e)}")
 
-    def _parse_stream_event(self, data: Any) -> ResponseStreamEvent:
+    def _parse_stream_event(self, data: Any, event_type: Optional[str] = None) -> ResponseStreamEvent:
         """Parse streaming event data"""
         # Handle case where data is a list (delta chunks)
         if isinstance(data, list):
             # This is a delta output array
-            event = ResponseStreamEvent(type="response.delta")
+            event = ResponseStreamEvent(type=event_type or "response.delta")
             event.delta = ResponseDelta(output=data)
             return event
 
         # Handle None or other non-dict data
         if not isinstance(data, dict):
             # Fallback for unexpected data
-            event = ResponseStreamEvent(type="unknown")
+            event = ResponseStreamEvent(type=event_type or "unknown")
             return event
 
         # Handle simple delta format: {'index': 0, 'delta': {'type': 'text', 'text': 'Hello'}}
@@ -214,7 +273,7 @@ class TokenRouter:
                         }
                     ]
                 }
-                event = ResponseStreamEvent(type="response.delta")
+                event = ResponseStreamEvent(type=event_type or "response.delta")
                 event.delta = ResponseDelta(output=[output_item])
                 return event
 
@@ -225,7 +284,7 @@ class TokenRouter:
             return event
 
         # Standard response event handling
-        event = ResponseStreamEvent(type=data.get("type", ""))
+        event = ResponseStreamEvent(type=data.get("type") or event_type or "event")
 
         if "response" in data:
             response_data = data["response"]
@@ -256,6 +315,11 @@ class TokenRouter:
 
         event.event_id = data.get("event_id")
         event.rate_limits = data.get("rate_limits")
+        event.metadata = data.get("metadata")
+        event.raw = data
+
+        if event.type == "response.completed" and event.response:
+            event.response.output_text = self._extract_output_text(event.response)
 
         return event
 

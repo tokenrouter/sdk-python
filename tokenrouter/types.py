@@ -115,6 +115,8 @@ class ResponseStreamEvent:
     item: Optional[OutputItem] = None
     event_id: Optional[str] = None
     rate_limits: Optional[List[Dict[str, Any]]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    raw: Optional[Any] = None
 
 
 class InputItemsList(TypedDict):
